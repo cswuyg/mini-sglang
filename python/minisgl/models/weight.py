@@ -36,7 +36,12 @@ def _shard_state_dict(state_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Te
             num_embeddings_per_partition = div_ceil(num_embeddings, n)
             vocab_start_idx = r * num_embeddings_per_partition
             vocab_end_idx = min((r + 1) * num_embeddings_per_partition, num_embeddings)
-            shard_state_dict[key] = value[vocab_start_idx:vocab_end_idx, :]
+            shard = value[vocab_start_idx:vocab_end_idx, :]
+            # Pad the last rank if vocab size is not divisible by tp_size
+            pad_rows = num_embeddings_per_partition - shard.shape[0]
+            if pad_rows > 0:
+                shard = torch.nn.functional.pad(shard, (0, 0, 0, pad_rows))
+            shard_state_dict[key] = shard
         else:
             shard_state_dict[key] = value
     return shard_state_dict
