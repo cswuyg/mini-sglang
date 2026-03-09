@@ -144,15 +144,21 @@ class Engine:
             }
         else:
             return {
-                k: v.to(self.dtype) for k, v in load_weight(config.model_path, self.device).items()
+                k: v.to(self.dtype)
+                for k, v in load_weight(
+                    config.model_path, self.device, config.model_config.num_kv_heads
+                ).items()
             }
 
     def _determine_num_pages(self, old_free_memory: int, config: EngineConfig) -> int:
         new_free_memory = self._sync_get_memory()[1]
+        # When num_kv_heads < tp_size (GQA/MQA), multiple ranks share the same KV head,
+        # so each rank holds at least 1 KV head. This matches the sharding logic in weight.py.
+        kv_heads_per_rank = max(config.model_config.num_kv_heads // config.tp_info.size, 1)
         cache_per_page = (
             2  # key + value
             * config.model_config.head_dim
-            * div_even(config.model_config.num_kv_heads, config.tp_info.size)
+            * kv_heads_per_rank
             * config.page_size
             * self.dtype.itemsize
             * config.model_config.num_layers

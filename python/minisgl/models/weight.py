@@ -10,24 +10,39 @@ from minisgl.distributed import get_tp_info
 from minisgl.utils import div_ceil, download_hf_weight
 
 
-def _shard_state_dict(state_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+def _shard_state_dict(
+    state_dict: Dict[str, torch.Tensor], num_kv_heads: int
+) -> Dict[str, torch.Tensor]:
     shard_state_dict: Dict[str, torch.Tensor] = {}
     tp_info = get_tp_info()
     r = tp_info.rank
     n = tp_info.size
     SPLIT_DIM_0_LIST = [
         ".q_proj",
-        ".k_proj",
-        ".v_proj",
         ".gate_proj",
         ".up_proj",
+    ]
+    KV_PROJ_LIST = [
+        ".k_proj",
+        ".v_proj",
     ]
     SPLIT_DIM_1_LIST = [
         ".o_proj",
         ".down_proj",
     ]
     for key, value in state_dict.items():
-        if any(key.count(sub) for sub in SPLIT_DIM_0_LIST):
+        if any(sub in key for sub in KV_PROJ_LIST):
+            # Number of rows per kv head
+            head_dim = value.shape[0] // num_kv_heads
+            # Compute the kv head range for the current rank (floor division;
+            # when kv_heads < tp_size, multiple ranks share the same head)
+            head_start = (r * num_kv_heads) // n
+            head_end = ((r + 1) * num_kv_heads) // n
+            # If head_end == head_start, this rank has no exclusive head;
+            # fall back to head_start so the rank replicates that head
+            head_end = max(head_end, head_start + 1)
+            shard_state_dict[key] = value[head_start * head_dim : head_end * head_dim]
+        elif any(sub in key for sub in SPLIT_DIM_0_LIST):
             shard_state_dict[key] = value.chunk(n, dim=0)[r]
         elif any(key.count(sub) for sub in SPLIT_DIM_1_LIST):
             shard_state_dict[key] = value.chunk(n, dim=1)[r]
@@ -68,7 +83,9 @@ def _merge_state_dict(state_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Te
     return filtered_state_dict
 
 
-def load_weight(model_path: str, device: torch.device) -> Dict[str, torch.Tensor]:
+def load_weight(
+    model_path: str, device: torch.device, num_kv_heads: int
+) -> Dict[str, torch.Tensor]:
     model_folder = download_hf_weight(model_path)
     files = glob.glob(f"{model_folder}/*.safetensors")
     state_dict: Dict[str, torch.Tensor] = {}
@@ -83,6 +100,6 @@ def load_weight(model_path: str, device: torch.device) -> Dict[str, torch.Tensor
                 state_dict[name] = f.get_tensor(name)
 
     if tp_info.size > 1:
-        state_dict = _shard_state_dict(state_dict)
+        state_dict = _shard_state_dict(state_dict, num_kv_heads)
 
     return _merge_state_dict(state_dict)

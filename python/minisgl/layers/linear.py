@@ -79,12 +79,25 @@ class LinearQKVMerged(_LinearTPImpl):
     ):
         tp_info = get_tp_info()
 
-        GQA_ratio = div_even(num_qo_heads, num_kv_heads)
-        local_num_kv = div_even(num_kv_heads, tp_info.size)
+        r, n = tp_info.rank, tp_info.size
+
+        # q heads are evenly split across tp_size (consistent with q_proj in SPLIT_DIM_0_LIST of weight.py)
+        local_num_q = div_even(num_qo_heads, n)
+
+        # kv heads are distributed by head index (supports GQA where kv_heads < tp_size)
+        if n <= num_kv_heads:
+            assert num_kv_heads % n == 0, f"{num_kv_heads = } must be divisible by {n = }"
+        else:
+            assert n % num_kv_heads == 0, f"{n = } must be divisible by {num_kv_heads = }"
+        kv_head_start = (r * num_kv_heads) // n
+        kv_head_end = ((r + 1) * num_kv_heads) // n
+        kv_head_end = max(kv_head_end, kv_head_start + 1)
+        local_num_kv = kv_head_end - kv_head_start
+
         full_isize = hidden_size
-        full_osize = (GQA_ratio + 2) * num_kv_heads * head_dim
+        full_osize = (num_qo_heads + 2 * num_kv_heads) * head_dim
         local_isize = hidden_size
-        local_osize = (GQA_ratio + 2) * local_num_kv * head_dim
+        local_osize = (local_num_q + 2 * local_num_kv) * head_dim
         super().__init__(full_isize, full_osize, local_isize, local_osize, has_bias)
 
 

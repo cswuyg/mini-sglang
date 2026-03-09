@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import torch
 from minisgl.distributed import get_tp_info
-from minisgl.utils import div_even
 
 from .base import BaseKVCachePool
 
@@ -24,7 +23,7 @@ class MHAKVCache(BaseKVCachePool):
         device: torch.device,
     ) -> None:
         tp_info = get_tp_info()
-        local_kv_heads = div_even(num_kv_heads, tp_info.size)
+        local_kv_heads = max(num_kv_heads // tp_info.size, 1)
         self._kv_buffer = torch.empty(
             (2, num_layers, num_pages, page_size, local_kv_heads, head_dim),
             device=device,

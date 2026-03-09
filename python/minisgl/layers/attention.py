@@ -31,7 +31,15 @@ class AttentionLayer(StateLessOP):
         self.head_dim = head_dim
         tp_size = get_tp_info().size
         self.num_qo_heads = div_even(num_qo_heads, tp_size)
-        self.num_kv_heads = div_even(num_kv_heads, tp_size)
+        if tp_size <= num_kv_heads:
+            assert (
+                num_kv_heads % tp_size == 0
+            ), f"{num_kv_heads = } must be divisible by {tp_size = }"
+        else:
+            assert (
+                tp_size % num_kv_heads == 0
+            ), f"{tp_size = } must be divisible by {num_kv_heads = }"
+        self.num_kv_heads = max(num_kv_heads // tp_size, 1)
         self.qo_attn_dim = self.num_qo_heads * head_dim
         self.kv_attn_dim = self.num_kv_heads * head_dim
         self.rotary = get_rope(
